@@ -75,3 +75,17 @@ A geographic visualization (ArcGIS map) was used to show how housing prices vary
 ---
 
 ## 📁 Project Structure
+
+
+---
+
+## 👥 Authors
+- Stanley Occean  
+- Jonah Liautaud  
+
+Pace University – M.S. Data Science
+
+---
+
+## 📄 License
+This project is for academic purposes.
