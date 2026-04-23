@@ -90,7 +90,6 @@ A geographic visualization (ArcGIS map) was used to show how housing prices vary
 1. Install the required Python packages:
    ```bash
    pip install -r requirements.txt
-   
 ---
 
 ## 📁 Project Structure
