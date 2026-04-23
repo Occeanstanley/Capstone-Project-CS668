@@ -8,6 +8,10 @@ This project examines how major economic factors relate to housing prices across
 ## 🎯 Objective
 To examine how cost of living, income growth, unemployment, population, and migration relate to the Housing Price Index (HPI) across the United States.
 
+## 📄 Project Files
+- [Final Paper](./Final_Paper.pdf)
+- [Poster](./Poster.pdf)
+
 ## ❓ Research Question
 How are unemployment, income growth, population change, migration, and cost-of-living differences associated with housing prices in U.S. states between 2020 and 2024?
 
