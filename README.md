@@ -91,9 +91,28 @@ A geographic visualization (ArcGIS map) was used to show how housing prices vary
    ```bash
    pip install -r requirements.txt
 ---
+   ```bash
+python housing_project_analysis.py
 
+```
 ## 📁 Project Structure
-
+```
+Capstone-Project-CS668/
+├── README.md
+├── Final_Paper.pdf
+├── Poster.pdf
+├── housing_project_analysis.py
+├── requirements.txt
+├── RPP_2020_2024_clean.xlsx
+├── economic_data_rpp_analysis.xlsx
+├── hpi_master.csv
+├── state_year_unemployment_clean.csv
+├── stateinflow2020-2021.csv
+├── stateinflow2021-2022.csv
+├── stateinflow2223.csv
+├── stateoutflow2020-2021.csv
+├── stateoutflow2021-2022.csv
+└── stateoutflow2223.csv
 
 ---
 
