@@ -47,9 +47,6 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
 
-# ----------------------------
-# Paths
-# ----------------------------
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -57,8 +54,6 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 FILES = {
     "merged_workbook": BASE_DIR / "economic_data_rpp_analysis.xlsx",
     "rpp_workbook": BASE_DIR / "RPP_2020_2024_clean.xlsx",
-    "hpi_csv": BASE_DIR / "hpi_master.csv",
-    "unemployment_csv": BASE_DIR / "state_year_unemployment_clean.csv",
     "inflow_2021": BASE_DIR / "stateinflow2020-2021.csv",
     "outflow_2021": BASE_DIR / "stateoutflow2020-2021.csv",
     "inflow_2022": BASE_DIR / "stateinflow2021-2022.csv",
@@ -66,16 +61,6 @@ FILES = {
     "inflow_2023": BASE_DIR / "stateinflow2223.csv",
     "outflow_2023": BASE_DIR / "stateoutflow2223.csv",
 }
-
-
-# ----------------------------
-# Utilities
-# ----------------------------
-def first_existing(paths: Iterable[Path]) -> Path | None:
-    for p in paths:
-        if p.exists():
-            return p
-    return None
 
 
 def first_match(columns: Iterable[str], candidates: Iterable[str]) -> str:
@@ -93,6 +78,7 @@ def normalize_state_names(series: pd.Series) -> pd.Series:
     return (
         series.astype(str)
         .str.strip()
+        .str.title()
         .replace({
             "District Of Columbia": "District of Columbia",
             "D.C.": "District of Columbia",
@@ -110,14 +96,7 @@ def rmse(y_true: pd.Series, y_pred: np.ndarray) -> float:
     return float(np.sqrt(mean_squared_error(y_true, y_pred)))
 
 
-# ----------------------------
-# Migration processing
-# ----------------------------
 def build_migration_for_year(inflow_path: Path, outflow_path: Path, panel_year: int) -> pd.DataFrame:
-    """
-    Build net migration for one panel year from IRS flow-year inflow/outflow files.
-    The file formats can vary, so this uses candidate columns.
-    """
     inflow = pd.read_csv(inflow_path)
     outflow = pd.read_csv(outflow_path)
 
@@ -129,7 +108,6 @@ def build_migration_for_year(inflow_path: Path, outflow_path: Path, panel_year: 
     outflow_dest = first_match(outflow.columns, ["y2_statefips", "statefips2", "destination_state_fips"])
     outflow_people = first_match(outflow.columns, ["n2", "num_returns_exemptions", "exmpt_num"])
 
-    # Drop within-state moves
     inflow = inflow[inflow[inflow_origin] != inflow[inflow_dest]].copy()
     outflow = outflow[outflow[outflow_origin] != outflow[outflow_dest]].copy()
 
@@ -153,14 +131,6 @@ def build_migration_for_year(inflow_path: Path, outflow_path: Path, panel_year: 
 
 
 def build_all_migration() -> pd.DataFrame:
-    needed = [
-        FILES["inflow_2021"], FILES["outflow_2021"],
-        FILES["inflow_2022"], FILES["outflow_2022"],
-        FILES["inflow_2023"], FILES["outflow_2023"],
-    ]
-    if not all(p.exists() for p in needed):
-        raise FileNotFoundError("One or more IRS migration files are missing.")
-
     mig_2021 = build_migration_for_year(FILES["inflow_2021"], FILES["outflow_2021"], 2021)
     mig_2022 = build_migration_for_year(FILES["inflow_2022"], FILES["outflow_2022"], 2022)
     mig_2023 = build_migration_for_year(FILES["inflow_2023"], FILES["outflow_2023"], 2023)
@@ -170,28 +140,15 @@ def build_all_migration() -> pd.DataFrame:
     return migration
 
 
-# ----------------------------
-# Data loading
-# ----------------------------
 def load_primary_dataset() -> pd.DataFrame:
-    """
-    Primary path:
-    - try to load the already merged workbook first
-    Fallback path:
-    - if that is not available or does not contain needed fields,
-      raise an error and let the user adjust.
-    """
     workbook = FILES["merged_workbook"]
     if not workbook.exists():
         raise FileNotFoundError(
-            "economic_data_rpp_analysis.xlsx was not found. "
-            "This script expects that cleaned merged workbook to be in the repo root."
+            "economic_data_rpp_analysis.xlsx was not found. Place it in the repo root before running the script."
         )
 
     xls = pd.ExcelFile(workbook)
-    preferred_sheet_order = [
-        "Merged_Data", "Merged", "Data", "Sheet1"
-    ]
+    preferred_sheet_order = ["Merged_Data", "Merged", "Data", "Sheet1"]
     chosen_sheet = None
     for sheet in preferred_sheet_order:
         if sheet in xls.sheet_names:
@@ -202,13 +159,12 @@ def load_primary_dataset() -> pd.DataFrame:
 
     df = pd.read_excel(workbook, sheet_name=chosen_sheet)
 
-    # Standardize likely column names
     rename_map = {}
     for col in df.columns:
         low = str(col).strip().lower()
         if low in {"state", "geoname"}:
             rename_map[col] = "state"
-        elif low in {"year"}:
+        elif low == "year":
             rename_map[col] = "year"
         elif low in {"price_index", "hpi", "house_price_index", "housing_price_index"}:
             rename_map[col] = "price_index"
@@ -218,7 +174,7 @@ def load_primary_dataset() -> pd.DataFrame:
             rename_map[col] = "income_change"
         elif low in {"unemployment_rate", "unemployment"}:
             rename_map[col] = "unemployment_rate"
-        elif low in {"population"}:
+        elif low == "population":
             rename_map[col] = "population"
         elif low in {"state_fips", "geofips"}:
             rename_map[col] = "state_fips"
@@ -235,40 +191,34 @@ def load_primary_dataset() -> pd.DataFrame:
 
     df["state"] = normalize_state_names(df["state"])
     df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
-    for col in ["price_index", "unemployment_rate", "income_change", "population", "rpp"]:
+
+    numeric_cols = ["price_index", "unemployment_rate", "income_change", "population", "rpp"]
+    for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     if "state_fips" in df.columns:
         df["state_fips"] = pd.to_numeric(df["state_fips"], errors="coerce").astype("Int64")
+    else:
+        raise KeyError("The merged workbook must include 'state_fips' to merge migration data.")
 
-    # Keep 50-state sample
     df = df[df["state"] != "District of Columbia"].copy()
-
     return df
 
 
-def merge_migration_if_needed(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    If net_migration already exists in the merged workbook, keep it.
-    Otherwise, build it from raw IRS files and merge by state_fips + year.
-    """
+def merge_migration(df: pd.DataFrame) -> pd.DataFrame:
     if "net_migration" in df.columns:
         df["net_migration"] = pd.to_numeric(df["net_migration"], errors="coerce")
         return df
 
-    if "state_fips" not in df.columns:
-        raise KeyError(
-            "The merged dataset does not include 'state_fips', which is required to merge raw IRS migration files."
-        )
-
     migration = build_all_migration()
-    merged = df.merge(migration[["state_fips", "year", "net_migration"]], on=["state_fips", "year"], how="left")
+    merged = df.merge(
+        migration[["state_fips", "year", "inflow_people", "outflow_people", "net_migration"]],
+        on=["state_fips", "year"],
+        how="left"
+    )
     return merged
 
 
-# ----------------------------
-# Figures
-# ----------------------------
 def make_scatter(df: pd.DataFrame, x: str, y: str, title: str, xlabel: str, ylabel: str, filename: str) -> None:
     plot_df = df[[x, y]].dropna().copy()
     if plot_df.empty:
@@ -360,9 +310,8 @@ def create_all_figures(df: pd.DataFrame) -> None:
         "housing_price_trend.png"
     )
 
-    # Migration subset visual
-    if "net_migration" in df.columns:
-        mig_subset = df[df["year"].isin([2021, 2022, 2023])].copy()
+    mig_subset = df[df["year"].isin([2021, 2022, 2023])].copy()
+    if "net_migration" in mig_subset.columns:
         make_scatter(
             mig_subset, "net_migration", "price_index",
             "Net Migration vs Housing Price Index (2021–2023)",
@@ -372,10 +321,7 @@ def create_all_figures(df: pd.DataFrame) -> None:
         make_heatmap(mig_subset, "correlation_heatmap_2021_2023.png")
 
 
-# ----------------------------
-# Modeling
-# ----------------------------
-def fit_and_evaluate(df: pd.DataFrame, features: list[str], label: str) -> tuple[dict, dict, pd.DataFrame]:
+def fit_and_evaluate(df: pd.DataFrame, features: list[str], label: str):
     model_df = df[features + ["price_index"]].dropna().copy()
     if model_df.empty:
         raise ValueError(f"No usable rows found for model: {label}")
@@ -387,7 +333,6 @@ def fit_and_evaluate(df: pd.DataFrame, features: list[str], label: str) -> tuple
         X, y, test_size=0.20, random_state=42
     )
 
-    # Linear regression
     lr = LinearRegression()
     lr.fit(X_train, y_train)
     lr_pred = lr.predict(X_test)
@@ -407,7 +352,6 @@ def fit_and_evaluate(df: pd.DataFrame, features: list[str], label: str) -> tuple
     coef_df["intercept"] = float(lr.intercept_)
     coef_df["dataset"] = label
 
-    # Random forest
     rf = RandomForestRegressor(
         n_estimators=300,
         min_samples_leaf=2,
@@ -428,24 +372,21 @@ def fit_and_evaluate(df: pd.DataFrame, features: list[str], label: str) -> tuple
     return lr_metrics, rf_metrics, coef_df
 
 
-def run_models(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def run_models(df: pd.DataFrame):
     results = []
     coef_tables = []
 
-    # Baseline: 2020-2024
     baseline_df = df[df["year"].between(2020, 2024, inclusive="both")].copy()
     baseline_features = ["unemployment_rate", "income_change", "population", "rpp"]
     lr_base, rf_base, coef_base = fit_and_evaluate(baseline_df, baseline_features, "2020–2024 (Baseline)")
     results.extend([lr_base, rf_base])
     coef_tables.append(coef_base)
 
-    # Migration subset: 2021-2023
-    if "net_migration" in df.columns:
-        migration_df = df[df["year"].isin([2021, 2022, 2023])].copy()
-        migration_features = ["unemployment_rate", "income_change", "population", "rpp", "net_migration"]
-        lr_mig, rf_mig, coef_mig = fit_and_evaluate(migration_df, migration_features, "2021–2023 (Migration Subset)")
-        results.extend([lr_mig, rf_mig])
-        coef_tables.append(coef_mig)
+    migration_df = df[df["year"].isin([2021, 2022, 2023])].copy()
+    migration_features = ["unemployment_rate", "income_change", "population", "rpp", "net_migration"]
+    lr_mig, rf_mig, coef_mig = fit_and_evaluate(migration_df, migration_features, "2021–2023 (Migration Subset)")
+    results.extend([lr_mig, rf_mig])
+    coef_tables.append(coef_mig)
 
     results_df = pd.DataFrame(results)
     coef_df = pd.concat(coef_tables, ignore_index=True)
@@ -456,23 +397,15 @@ def run_models(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return results_df, coef_df
 
 
-# ----------------------------
-# Main
-# ----------------------------
 def main() -> None:
     df = load_primary_dataset()
-    df = merge_migration_if_needed(df)
+    df = merge_migration(df)
 
-    # Save the final merged analysis data
     df.to_csv(OUTPUT_DIR / "merged_analysis_dataset.csv", index=False)
 
-    # Figures
     create_all_figures(df)
-
-    # Models
     results_df, coef_df = run_models(df)
 
-    # Basic console summary
     print("Analysis complete.")
     print(f"Outputs saved to: {OUTPUT_DIR}")
     print("\nModel performance:")
