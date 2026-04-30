@@ -11,6 +11,7 @@ To examine how cost of living, income growth, unemployment, population, and migr
 ## 📄 Project Files
 - [Final Paper](./Final_Paper.pdf)
 - [Poster](./Poster.pdf)
+- [Capstone Presentation](./Capstone_Presentation.pdf)
 
 ## ❓ Research Question
 How are unemployment, income growth, population change, migration, and cost-of-living differences associated with housing prices in U.S. states between 2020 and 2024?
