@@ -1,22 +1,11 @@
-"""
-Capstone project analysis script for:
-Analyzing the Impact of Economic Factors on Housing Prices in the United States
-
-- 50 U.S. states only (District of Columbia removed)
-- Full baseline panel: 2020-2024
-- Baseline predictors: unemployment_rate, income_change, population, rpp
-- Migration subset: 2021-2023
-- Migration built from IRS flow-year files:
-    2020-2021 -> panel year 2021
-    2021-2022 -> panel year 2022
-    2022-2023 -> panel year 2023
-- Models:
-    1) Multiple Linear Regression
-    2) Random Forest Regression
-- Outputs:
-    merged dataset, figures, coefficients, model comparison CSV
-
-"""
+# =========================================================
+# CAPSTONE PROJECT ANALYSIS SCRIPT
+# Economic Drivers of U.S. Housing Prices
+#
+# Main model: Two-way fixed effects panel regression
+# Comparison model: Random Forest
+# Dataset: 50-state panel, 2020-2024
+# =========================================================
 
 from pathlib import Path
 from typing import Iterable
@@ -24,10 +13,9 @@ import warnings
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import statsmodels.formula.api as smf
 
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
@@ -38,14 +26,10 @@ warnings.filterwarnings("ignore")
 # =========================================================
 
 BASE_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = BASE_DIR / "outputs"
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_FILE = BASE_DIR / "capstone_master_regression_workbook.xlsx"
 
 FILES = {
     "merged_workbook": BASE_DIR / "economic_data_rpp_analysis.xlsx",
-    "rpp_workbook": BASE_DIR / "RPP_2020_2024_clean.xlsx",
-    "hpi_csv": BASE_DIR / "hpi_master.csv",
-    "unemployment_csv": BASE_DIR / "state_year_unemployment_clean.csv",
     "inflow_2021": BASE_DIR / "stateinflow2020-2021.csv",
     "outflow_2021": BASE_DIR / "stateoutflow2020-2021.csv",
     "inflow_2022": BASE_DIR / "stateinflow2021-2022.csv",
@@ -54,36 +38,9 @@ FILES = {
     "outflow_2023": BASE_DIR / "stateoutflow2223.csv",
 }
 
-STATE_ABBR = {
-    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
-    "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
-    "Florida": "FL", "Georgia": "GA", "Hawaii": "HI", "Idaho": "ID",
-    "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
-    "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
-    "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS",
-    "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV",
-    "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
-    "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
-    "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC",
-    "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX", "Utah": "UT",
-    "Vermont": "VT", "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
-    "Wisconsin": "WI", "Wyoming": "WY"
-}
-
 # =========================================================
 # 2. HELPER FUNCTIONS
 # =========================================================
-
-def first_match(columns: Iterable[str], candidates: Iterable[str]) -> str:
-    cols = list(columns)
-    lowered = {c.lower(): c for c in cols}
-    for candidate in candidates:
-        if candidate in cols:
-            return candidate
-        if candidate.lower() in lowered:
-            return lowered[candidate.lower()]
-    raise KeyError(f"Could not find any of these columns: {list(candidates)}. Available: {cols}")
-
 
 def normalize_state_names(series: pd.Series) -> pd.Series:
     return (
@@ -97,17 +54,22 @@ def normalize_state_names(series: pd.Series) -> pd.Series:
     )
 
 
-def save_plot(path: Path) -> None:
-    plt.tight_layout()
-    plt.savefig(path, dpi=200, bbox_inches="tight")
-    plt.close()
-
-
 def rmse(y_true: pd.Series, y_pred: np.ndarray) -> float:
     return float(np.sqrt(mean_squared_error(y_true, y_pred)))
 
+
+def first_match(columns: Iterable[str], candidates: Iterable[str]) -> str:
+    cols = list(columns)
+    lowered = {c.lower(): c for c in cols}
+    for candidate in candidates:
+        if candidate in cols:
+            return candidate
+        if candidate.lower() in lowered:
+            return lowered[candidate.lower()]
+    raise KeyError(f"Could not find columns {list(candidates)} in available columns: {cols}")
+
 # =========================================================
-# 3. DATA LOADING AND CLEANING
+# 3. DATA COLLECTION / LOADING
 # =========================================================
 
 def load_primary_dataset() -> pd.DataFrame:
@@ -120,10 +82,12 @@ def load_primary_dataset() -> pd.DataFrame:
     xls = pd.ExcelFile(workbook)
     preferred_sheet_order = ["Merged_Data", "Merged", "Data", "Sheet1"]
     chosen_sheet = None
+
     for sheet in preferred_sheet_order:
         if sheet in xls.sheet_names:
             chosen_sheet = sheet
             break
+
     if chosen_sheet is None:
         chosen_sheet = xls.sheet_names[0]
 
@@ -151,32 +115,39 @@ def load_primary_dataset() -> pd.DataFrame:
 
     df = df.rename(columns=rename_map)
 
-    required = ["state", "year", "price_index", "unemployment_rate", "income_change", "population", "rpp"]
+    required = [
+        "state",
+        "year",
+        "price_index",
+        "unemployment_rate",
+        "income_change",
+        "population",
+        "rpp",
+    ]
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise KeyError(f"Missing required columns: {missing}. Available columns: {list(df.columns)}")
 
     df["state"] = normalize_state_names(df["state"])
-    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype(int)
 
     for col in ["price_index", "unemployment_rate", "income_change", "population", "rpp"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    if "state_fips" not in df.columns:
-        raise KeyError("The merged workbook must include 'state_fips' to merge migration data.")
+    if "state_fips" in df.columns:
+        df["state_fips"] = pd.to_numeric(df["state_fips"], errors="coerce")
 
-    df["state_fips"] = pd.to_numeric(df["state_fips"], errors="coerce").astype("Int64")
-
-    # Keep only the 50 states
     df = df[df["state"] != "District of Columbia"].copy()
-
     return df
 
 # =========================================================
-# 4. MIGRATION DATA PROCESSING
+# 4. MIGRATION DATA COLLECTION AND PROCESSING
 # =========================================================
 
 def build_migration_for_year(inflow_path: Path, outflow_path: Path, panel_year: int) -> pd.DataFrame:
+    if not inflow_path.exists() or not outflow_path.exists():
+        return pd.DataFrame(columns=["state_fips", "inflow_people", "outflow_people", "net_migration", "year"])
+
     inflow = pd.read_csv(inflow_path)
     outflow = pd.read_csv(outflow_path)
 
@@ -188,7 +159,6 @@ def build_migration_for_year(inflow_path: Path, outflow_path: Path, panel_year: 
     outflow_dest = first_match(outflow.columns, ["y2_statefips", "statefips2", "destination_state_fips"])
     outflow_people = first_match(outflow.columns, ["n2", "num_returns_exemptions", "exmpt_num"])
 
-    # Remove within-state moves
     inflow = inflow[inflow[inflow_origin] != inflow[inflow_dest]].copy()
     outflow = outflow[outflow[outflow_origin] != outflow[outflow_dest]].copy()
 
@@ -205,7 +175,7 @@ def build_migration_for_year(inflow_path: Path, outflow_path: Path, panel_year: 
     )
 
     mig = inflow_agg.merge(outflow_agg, on="state_fips", how="outer").fillna(0)
-    mig["state_fips"] = pd.to_numeric(mig["state_fips"], errors="coerce").astype("Int64")
+    mig["state_fips"] = pd.to_numeric(mig["state_fips"], errors="coerce")
     mig["net_migration"] = mig["inflow_people"] - mig["outflow_people"]
     mig["year"] = panel_year
     return mig
@@ -217,16 +187,16 @@ def build_all_migration() -> pd.DataFrame:
     mig_2023 = build_migration_for_year(FILES["inflow_2023"], FILES["outflow_2023"], 2023)
 
     migration = pd.concat([mig_2021, mig_2022, mig_2023], ignore_index=True)
-    migration.to_csv(OUTPUT_DIR / "migration_panel_2021_2023.csv", index=False)
     return migration
 
 
-def merge_migration(df: pd.DataFrame) -> pd.DataFrame:
-    if "net_migration" in df.columns:
-        df["net_migration"] = pd.to_numeric(df["net_migration"], errors="coerce")
+def merge_migration(df: pd.DataFrame, migration: pd.DataFrame) -> pd.DataFrame:
+    if migration.empty:
+        df["inflow_people"] = np.nan
+        df["outflow_people"] = np.nan
+        df["net_migration"] = np.nan
         return df
 
-    migration = build_all_migration()
     merged = df.merge(
         migration[["state_fips", "year", "inflow_people", "outflow_people", "net_migration"]],
         on=["state_fips", "year"],
@@ -235,293 +205,213 @@ def merge_migration(df: pd.DataFrame) -> pd.DataFrame:
     return merged
 
 # =========================================================
-# 5. VISUALIZATION FUNCTIONS
+# 5. DATA CLEANING / MINING / PANEL PREPARATION
 # =========================================================
 
-def make_scatter(df: pd.DataFrame, x: str, y: str, title: str, xlabel: str, ylabel: str, filename: str) -> None:
-    plot_df = df[[x, y]].dropna().copy()
-    if plot_df.empty:
-        return
-
-    plt.figure(figsize=(8, 5))
-    plt.scatter(plot_df[x], plot_df[y], alpha=0.7, s=10)
-
-    if len(plot_df) > 1:
-        coef = np.polyfit(plot_df[x], plot_df[y], 1)
-        x_line = np.linspace(plot_df[x].min(), plot_df[x].max(), 100)
-        y_line = coef[0] * x_line + coef[1]
-        plt.plot(x_line, y_line, linewidth=2)
-
-    plt.title(title)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.grid(True, alpha=0.3)
-    save_plot(OUTPUT_DIR / filename)
+def prepare_panel_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    required = [
+        "state",
+        "year",
+        "price_index",
+        "unemployment_rate",
+        "income_change",
+        "population",
+        "rpp",
+    ]
+    panel_df = df.dropna(subset=required).copy()
+    panel_df["state"] = panel_df["state"].astype("category")
+    return panel_df
 
 
-def make_line(df: pd.DataFrame, x: str, y: str, title: str, xlabel: str, ylabel: str, filename: str) -> None:
-    plot_df = df[[x, y]].dropna().copy()
-    if plot_df.empty:
-        return
-
-    plt.figure(figsize=(8, 5))
-    plt.plot(plot_df[x], plot_df[y], marker="o")
-    for _, row in plot_df.iterrows():
-        plt.text(row[x], row[y] + 4, f"{int(round(row[y]))}", ha="center", fontsize=8)
-    plt.title(title)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.grid(True, alpha=0.3)
-    save_plot(OUTPUT_DIR / filename)
-
-
-def make_heatmap(df: pd.DataFrame, filename: str) -> None:
-    cols = ["price_index", "rpp", "income_change", "unemployment_rate", "population", "net_migration"]
-    available = [c for c in cols if c in df.columns]
-    corr_df = df[available].corr()
-
-    plt.figure(figsize=(7, 5))
-    ax = plt.gca()
-    im = ax.imshow(corr_df.values, aspect="auto")
-    ax.set_xticks(range(len(corr_df.columns)))
-    ax.set_xticklabels(corr_df.columns, rotation=45, ha="right")
-    ax.set_yticks(range(len(corr_df.index)))
-    ax.set_yticklabels(corr_df.index)
-
-    for i in range(corr_df.shape[0]):
-        for j in range(corr_df.shape[1]):
-            ax.text(j, i, f"{corr_df.iloc[i, j]:.2f}", ha="center", va="center", fontsize=8)
-
-    plt.title("Correlation Heatmap (50 States)")
-    plt.colorbar(im)
-    save_plot(OUTPUT_DIR / filename)
-
-
-def make_top10_rpp(df: pd.DataFrame, filename: str) -> None:
-    top10 = (
-        df.groupby("state", as_index=False)["rpp"]
-        .mean()
-        .sort_values("rpp", ascending=False)
-        .head(10)
-        .sort_values("rpp", ascending=True)
-    )
-
-    plt.figure(figsize=(8, 5))
-    plt.barh(top10["state"], top10["rpp"])
-    plt.title("Top 10 States by Average Cost of Living (RPP)")
-    plt.xlabel("Average RPP")
-    plt.ylabel("")
-    save_plot(OUTPUT_DIR / filename)
-
-
-def make_spatial_map(df: pd.DataFrame, filename_html: str) -> None:
-    try:
-        import plotly.express as px
-    except ImportError:
-        return
-
-    map_df = (
-        df.groupby("state", as_index=False)["price_index"]
-        .mean()
-        .rename(columns={"price_index": "avg_hpi"})
-    )
-    map_df["abbr"] = map_df["state"].map(STATE_ABBR)
-    map_df = map_df.dropna(subset=["abbr"])
-
-    fig = px.choropleth(
-        map_df,
-        locations="abbr",
-        locationmode="USA-states",
-        color="avg_hpi",
-        scope="usa",
-        hover_name="state",
-        title="Housing Price Index Across U.S. States"
-    )
-    fig.write_html(OUTPUT_DIR / filename_html)
-
-
-def create_all_figures(df: pd.DataFrame) -> None:
-    # Correlation heatmap
-    heatmap_df = df[df["year"].isin([2021, 2022, 2023])].copy()
-    make_heatmap(heatmap_df, "correlation_heatmap_50_states.png")
-
-    # Cost of living vs housing prices
-    make_scatter(
-        df, "rpp", "price_index",
-        "Cost of Living vs Housing Prices",
-        "Regional Price Parity", "Housing Price Index",
-        "cost_of_living_vs_housing_prices.png"
-    )
-
-    # Unemployment vs housing prices
-    make_scatter(
-        df, "unemployment_rate", "price_index",
-        "Unemployment vs Housing Prices",
-        "Unemployment Rate", "Housing Price Index",
-        "unemployment_vs_housing_prices.png"
-    )
-
-    # Income growth vs housing prices
-    make_scatter(
-        df, "income_change", "price_index",
-        "Income Growth vs Housing Prices",
-        "Income Change", "Housing Price Index",
-        "income_growth_vs_housing_prices.png"
-    )
-
-    # Housing price trend
-    yearly = df.groupby("year", as_index=False)["price_index"].mean()
-    make_line(
-        yearly, "year", "price_index",
-        "Average Housing Price Trend Over Time",
-        "Year", "Average HPI",
-        "housing_price_trend.png"
-    )
-
-    # Top 10 states by average RPP
-    make_top10_rpp(df, "top10_states_by_average_rpp.png")
-
-    # Spatial analysis
-    make_spatial_map(df, "spatial_analysis_map.html")
+def build_descriptive_summary(df: pd.DataFrame) -> pd.DataFrame:
+    summary_rows = [
+        {"metric": "Number of states", "value": df["state"].nunique()},
+        {"metric": "Number of years", "value": df["year"].nunique()},
+        {"metric": "Number of observations", "value": len(df)},
+        {"metric": "Average HPI in 2020", "value": float(df[df["year"] == 2020]["price_index"].mean())},
+        {"metric": "Average HPI in 2024", "value": float(df[df["year"] == 2024]["price_index"].mean())},
+        {"metric": "Correlation: HPI and RPP", "value": float(df[["price_index", "rpp"]].corr().iloc[0, 1])},
+        {"metric": "Correlation: HPI and income change", "value": float(df[["price_index", "income_change"]].corr().iloc[0, 1])},
+        {"metric": "Correlation: HPI and unemployment", "value": float(df[["price_index", "unemployment_rate"]].corr().iloc[0, 1])},
+        {"metric": "Correlation: HPI and population", "value": float(df[["price_index", "population"]].corr().iloc[0, 1])},
+        {"metric": "Correlation: HPI and net migration", "value": float(df[["price_index", "net_migration"]].dropna().corr().iloc[0, 1]) if df["net_migration"].notna().any() else np.nan},
+    ]
+    return pd.DataFrame(summary_rows)
 
 # =========================================================
-# 6. MODELING FUNCTIONS
+# 6. METHODOLOGY: PANEL REGRESSION
 # =========================================================
 
-def fit_and_evaluate(df: pd.DataFrame, features: list[str], label: str):
-    model_df = df[features + ["price_index"]].dropna().copy()
-    if model_df.empty:
-        raise ValueError(f"No usable rows found for model: {label}")
+def run_panel_regression(df: pd.DataFrame):
+    formula = "price_index ~ unemployment_rate + income_change + population + rpp + C(state) + C(year)"
+    fe_model = smf.ols(formula, data=df).fit(
+        cov_type="cluster",
+        cov_kwds={"groups": df["state"]}
+    )
 
-    X = model_df[features]
-    y = model_df["price_index"]
+    conf = fe_model.conf_int()
+    coef_table = pd.DataFrame({
+        "term": fe_model.params.index,
+        "coef": fe_model.params.values,
+        "std_err": fe_model.bse.values,
+        "t_or_z": fe_model.tvalues.values,
+        "p_value": fe_model.pvalues.values,
+        "ci_low": conf[0].values,
+        "ci_high": conf[1].values,
+    })
+
+    main_vars = ["unemployment_rate", "income_change", "population", "rpp"]
+    main_coef_table = coef_table[coef_table["term"].isin(main_vars)].copy().reset_index(drop=True)
+    main_coef_table["r2"] = fe_model.rsquared
+    main_coef_table["r2_percent"] = fe_model.rsquared * 100
+    main_coef_table["adj_r2"] = fe_model.rsquared_adj
+    main_coef_table["adj_r2_percent"] = fe_model.rsquared_adj * 100
+
+    fitted_df = df.copy()
+    fitted_df["predicted_fe"] = fe_model.predict(df)
+    fitted_df["residual_fe"] = fitted_df["price_index"] - fitted_df["predicted_fe"]
+
+    panel_metrics = pd.DataFrame([{
+        "model": "Panel Regression (State FE + Year FE)",
+        "rmse": rmse(fitted_df["price_index"], fitted_df["predicted_fe"]),
+        "mae": float(mean_absolute_error(fitted_df["price_index"], fitted_df["predicted_fe"])),
+        "r2": float(r2_score(fitted_df["price_index"], fitted_df["predicted_fe"])),
+        "r2_percent": float(r2_score(fitted_df["price_index"], fitted_df["predicted_fe"])) * 100,
+        "notes": "In-sample fitted values from fixed-effects panel regression",
+    }])
+
+    return main_coef_table, fitted_df, panel_metrics
+
+# =========================================================
+# 7. COMPARISON MODEL: RANDOM FOREST
+# =========================================================
+
+def run_random_forest_comparison(df: pd.DataFrame):
+    rf_df = df.copy()
+
+    X = pd.get_dummies(
+        rf_df[["unemployment_rate", "income_change", "population", "rpp", "state", "year"]],
+        columns=["state", "year"],
+        drop_first=True
+    )
+    y = rf_df["price_index"]
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.20, random_state=42
     )
 
-    # Multiple Linear Regression
-    lr = LinearRegression()
-    lr.fit(X_train, y_train)
-    lr_pred = lr.predict(X_test)
-
-    lr_metrics = {
-        "Model": "Multiple Linear Regression",
-        "Dataset": label,
-        "RMSE": rmse(y_test, lr_pred),
-        "MAE": float(mean_absolute_error(y_test, lr_pred)),
-        "R2": float(r2_score(y_test, lr_pred)),
-    }
-
-    coef_df = pd.DataFrame({
-        "feature": features,
-        "coefficient": lr.coef_,
-    })
-    coef_df["intercept"] = float(lr.intercept_)
-    coef_df["dataset"] = label
-
-    # Random Forest Regression
-    rf = RandomForestRegressor(
-        n_estimators=300,
+    rf_model = RandomForestRegressor(
+        n_estimators=400,
         min_samples_leaf=2,
         random_state=42,
         n_jobs=-1
     )
-    rf.fit(X_train, y_train)
-    rf_pred = rf.predict(X_test)
+    rf_model.fit(X_train, y_train)
+    rf_pred = rf_model.predict(X_test)
 
-    rf_metrics = {
-        "Model": "Random Forest Regression",
-        "Dataset": label,
-        "RMSE": rmse(y_test, rf_pred),
-        "MAE": float(mean_absolute_error(y_test, rf_pred)),
-        "R2": float(r2_score(y_test, rf_pred)),
-    }
+    rf_metrics = pd.DataFrame([{
+        "model": "Random Forest (state/year dummies)",
+        "rmse": rmse(y_test, rf_pred),
+        "mae": float(mean_absolute_error(y_test, rf_pred)),
+        "r2": float(r2_score(y_test, rf_pred)),
+        "r2_percent": float(r2_score(y_test, rf_pred)) * 100,
+        "notes": "Out-of-sample test-set performance",
+    }])
 
-    return lr_metrics, rf_metrics, coef_df
+    feature_importance = pd.DataFrame({
+        "feature": X.columns,
+        "importance": rf_model.feature_importances_
+    }).sort_values("importance", ascending=False).reset_index(drop=True)
 
-
-def run_models(df: pd.DataFrame):
-    results = []
-    coef_tables = []
-
-    # Baseline model: 2020-2024
-    baseline_df = df[df["year"].between(2020, 2024, inclusive="both")].copy()
-    baseline_features = ["unemployment_rate", "income_change", "population", "rpp"]
-    lr_base, rf_base, coef_base = fit_and_evaluate(
-        baseline_df, baseline_features, "2020–2024 (Baseline)"
-    )
-    results.extend([lr_base, rf_base])
-    coef_tables.append(coef_base)
-
-    # Migration subset model: 2021-2023
-    migration_df = df[df["year"].isin([2021, 2022, 2023])].copy()
-    migration_features = ["unemployment_rate", "income_change", "population", "rpp", "net_migration"]
-    lr_mig, rf_mig, coef_mig = fit_and_evaluate(
-        migration_df, migration_features, "2021–2023 (Migration Subset)"
-    )
-    results.extend([lr_mig, rf_mig])
-    coef_tables.append(coef_mig)
-
-    results_df = pd.DataFrame(results)
-    coef_df = pd.concat(coef_tables, ignore_index=True)
-
-    results_df.to_csv(OUTPUT_DIR / "model_performance_comparison.csv", index=False)
-    coef_df.to_csv(OUTPUT_DIR / "linear_regression_coefficients.csv", index=False)
-
-    return results_df, coef_df
+    return rf_metrics, feature_importance
 
 # =========================================================
-# 7. SUMMARY OUTPUTS
+# 8. SAVE MASTER WORKBOOK
 # =========================================================
 
-def make_summary_text(df: pd.DataFrame, results_df: pd.DataFrame) -> None:
-    corr_cols = ["price_index", "rpp", "income_change", "unemployment_rate", "population", "net_migration"]
-    corr_df = df[corr_cols].corr(numeric_only=True)
+def save_master_workbook(
+    raw_df: pd.DataFrame,
+    migration_df: pd.DataFrame,
+    panel_df: pd.DataFrame,
+    summary_df: pd.DataFrame,
+    panel_coef_df: pd.DataFrame,
+    fitted_df: pd.DataFrame,
+    panel_metrics: pd.DataFrame,
+    rf_metrics: pd.DataFrame,
+    rf_importance: pd.DataFrame,
+) -> None:
+    model_comparison = pd.concat([panel_metrics, rf_metrics], ignore_index=True)
 
-    summary_lines = []
-    summary_lines.append("Key summary from automated analysis\n")
-    summary_lines.append(f"Average HPI in 2020: {df[df['year'] == 2020]['price_index'].mean():.0f}")
-    summary_lines.append(f"Average HPI in 2024: {df[df['year'] == 2024]['price_index'].mean():.0f}")
-    summary_lines.append(f"Correlation of HPI with RPP: {corr_df.loc['price_index', 'rpp']:.2f}")
-    summary_lines.append(f"Correlation of HPI with income change: {corr_df.loc['price_index', 'income_change']:.2f}")
-    summary_lines.append(f"Correlation of HPI with unemployment: {corr_df.loc['price_index', 'unemployment_rate']:.2f}")
-    if "net_migration" in corr_df.columns:
-        summary_lines.append(f"Correlation of HPI with migration: {corr_df.loc['price_index', 'net_migration']:.2f}")
-
-    summary_lines.append("\nModel comparison")
-    summary_lines.append(results_df.to_string(index=False))
-
-    (OUTPUT_DIR / "analysis_summary.txt").write_text("\n".join(summary_lines), encoding="utf-8")
+    with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl") as writer:
+        summary_df.to_excel(writer, sheet_name="summary", index=False)
+        raw_df.to_excel(writer, sheet_name="merged_data_with_migration", index=False)
+        migration_df.to_excel(writer, sheet_name="migration_data", index=False)
+        panel_df.to_excel(writer, sheet_name="panel_data", index=False)
+        panel_coef_df.to_excel(writer, sheet_name="panel_coefficients", index=False)
+        panel_metrics.to_excel(writer, sheet_name="panel_metrics", index=False)
+        rf_metrics.to_excel(writer, sheet_name="random_forest_metrics", index=False)
+        model_comparison.to_excel(writer, sheet_name="model_comparison", index=False)
+        fitted_df.to_excel(writer, sheet_name="fitted_values", index=False)
+        rf_importance.to_excel(writer, sheet_name="rf_importance", index=False)
 
 # =========================================================
-# 8. MAIN SCRIPT
+# 9. MAIN SCRIPT
 # =========================================================
 
 def main() -> None:
-    # Load and merge data
-    df = load_primary_dataset()
-    df = merge_migration(df)
+    # -----------------------------
+    # Data collection / loading
+    # -----------------------------
+    raw_df = load_primary_dataset()
 
-    # Save final merged analysis dataset
-    df.to_csv(OUTPUT_DIR / "merged_analysis_dataset.csv", index=False)
+    # -----------------------------
+    # Migration data collection and merge
+    # -----------------------------
+    migration_df = build_all_migration()
+    merged_df = merge_migration(raw_df, migration_df)
 
-    # Create all visualizations
-    create_all_figures(df)
+    # -----------------------------
+    # Data cleaning / mining / panel prep
+    # -----------------------------
+    panel_df = prepare_panel_dataset(merged_df)
+    summary_df = build_descriptive_summary(merged_df)
 
-    # Run models and save outputs
-    results_df, coef_df = run_models(df)
+    # -----------------------------
+    # Main methodology: panel regression
+    # -----------------------------
+    panel_coef_df, fitted_df, panel_metrics = run_panel_regression(panel_df)
 
-    # Save written summary
-    make_summary_text(df, results_df)
+    # -----------------------------
+    # Comparison model: Random Forest
+    # -----------------------------
+    rf_metrics, rf_importance = run_random_forest_comparison(panel_df)
 
-    # Print summary to console
+    # -----------------------------
+    # Save one organized workbook
+    # -----------------------------
+    save_master_workbook(
+        raw_df=merged_df,
+        migration_df=migration_df,
+        panel_df=panel_df,
+        summary_df=summary_df,
+        panel_coef_df=panel_coef_df,
+        fitted_df=fitted_df,
+        panel_metrics=panel_metrics,
+        rf_metrics=rf_metrics,
+        rf_importance=rf_importance,
+    )
+
     print("Analysis complete.")
-    print(f"Outputs saved to: {OUTPUT_DIR}")
-    print("\nModel performance:")
-    print(results_df.to_string(index=False))
-    print("\nLinear regression coefficients:")
-    print(coef_df.to_string(index=False))
+    print(f"Master workbook saved to: {OUTPUT_FILE}")
+
+    print("\nPanel regression coefficients:")
+    print(panel_coef_df.to_string(index=False))
+
+    print("\nPanel regression metrics:")
+    print(panel_metrics.to_string(index=False))
+
+    print("\nRandom Forest metrics:")
+    print(rf_metrics.to_string(index=False))
 
 
 if __name__ == "__main__":
