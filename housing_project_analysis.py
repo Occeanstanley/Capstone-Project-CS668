@@ -38,6 +38,22 @@ FILES = {
     "outflow_2023": BASE_DIR / "stateoutflow2223.csv",
 }
 
+STATE_ABBR = {
+    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
+    "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
+    "Florida": "FL", "Georgia": "GA", "Hawaii": "HI", "Idaho": "ID",
+    "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
+    "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+    "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS",
+    "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV",
+    "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
+    "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
+    "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC",
+    "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX", "Utah": "UT",
+    "Vermont": "VT", "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
+    "Wisconsin": "WI", "Wyoming": "WY"
+}
+
 # =========================================================
 # 2. HELPER FUNCTIONS
 # =========================================================
@@ -67,6 +83,7 @@ def first_match(columns: Iterable[str], candidates: Iterable[str]) -> str:
         if candidate.lower() in lowered:
             return lowered[candidate.lower()]
     raise KeyError(f"Could not find columns {list(candidates)} in available columns: {cols}")
+
 
 # =========================================================
 # 3. DATA COLLECTION / LOADING
@@ -140,6 +157,7 @@ def load_primary_dataset() -> pd.DataFrame:
     df = df[df["state"] != "District of Columbia"].copy()
     return df
 
+
 # =========================================================
 # 4. MIGRATION DATA COLLECTION AND PROCESSING
 # =========================================================
@@ -186,8 +204,7 @@ def build_all_migration() -> pd.DataFrame:
     mig_2022 = build_migration_for_year(FILES["inflow_2022"], FILES["outflow_2022"], 2022)
     mig_2023 = build_migration_for_year(FILES["inflow_2023"], FILES["outflow_2023"], 2023)
 
-    migration = pd.concat([mig_2021, mig_2022, mig_2023], ignore_index=True)
-    return migration
+    return pd.concat([mig_2021, mig_2022, mig_2023], ignore_index=True)
 
 
 def merge_migration(df: pd.DataFrame, migration: pd.DataFrame) -> pd.DataFrame:
@@ -203,6 +220,7 @@ def merge_migration(df: pd.DataFrame, migration: pd.DataFrame) -> pd.DataFrame:
         how="left"
     )
     return merged
+
 
 # =========================================================
 # 5. DATA CLEANING / MINING / PANEL PREPARATION
@@ -224,6 +242,12 @@ def prepare_panel_dataset(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_descriptive_summary(df: pd.DataFrame) -> pd.DataFrame:
+    net_mig_corr = np.nan
+    if "net_migration" in df.columns and df["net_migration"].notna().any():
+        temp = df[["price_index", "net_migration"]].dropna()
+        if len(temp) > 1:
+            net_mig_corr = float(temp.corr().iloc[0, 1])
+
     summary_rows = [
         {"metric": "Number of states", "value": df["state"].nunique()},
         {"metric": "Number of years", "value": df["year"].nunique()},
@@ -234,9 +258,28 @@ def build_descriptive_summary(df: pd.DataFrame) -> pd.DataFrame:
         {"metric": "Correlation: HPI and income change", "value": float(df[["price_index", "income_change"]].corr().iloc[0, 1])},
         {"metric": "Correlation: HPI and unemployment", "value": float(df[["price_index", "unemployment_rate"]].corr().iloc[0, 1])},
         {"metric": "Correlation: HPI and population", "value": float(df[["price_index", "population"]].corr().iloc[0, 1])},
-        {"metric": "Correlation: HPI and net migration", "value": float(df[["price_index", "net_migration"]].dropna().corr().iloc[0, 1]) if df["net_migration"].notna().any() else np.nan},
+        {"metric": "Correlation: HPI and net migration", "value": net_mig_corr},
     ]
     return pd.DataFrame(summary_rows)
+
+
+def build_state_period_averages(df: pd.DataFrame) -> pd.DataFrame:
+    period_df = df.copy()
+    period_df["period"] = ""
+    period_df.loc[period_df["year"].between(2020, 2022), "period"] = "COVID Period (2020–2022)"
+    period_df.loc[period_df["year"].between(2023, 2024), "period"] = "Post-COVID Period (2023–2024)"
+    period_df = period_df[period_df["period"] != ""].copy()
+
+    state_period = period_df.groupby(["period", "state"], as_index=False).agg({
+        "price_index": "mean",
+        "unemployment_rate": "mean",
+        "income_change": "mean",
+        "population": "mean",
+        "rpp": "mean",
+    })
+    state_period["state_abbr"] = state_period["state"].map(STATE_ABBR)
+    return state_period
+
 
 # =========================================================
 # 6. METHODOLOGY: PANEL REGRESSION
@@ -282,6 +325,7 @@ def run_panel_regression(df: pd.DataFrame):
 
     return main_coef_table, fitted_df, panel_metrics
 
+
 # =========================================================
 # 7. COMPARISON MODEL: RANDOM FOREST
 # =========================================================
@@ -325,6 +369,7 @@ def run_random_forest_comparison(df: pd.DataFrame):
 
     return rf_metrics, feature_importance
 
+
 # =========================================================
 # 8. SAVE MASTER WORKBOOK
 # =========================================================
@@ -333,6 +378,7 @@ def save_master_workbook(
     raw_df: pd.DataFrame,
     migration_df: pd.DataFrame,
     panel_df: pd.DataFrame,
+    state_period_df: pd.DataFrame,
     summary_df: pd.DataFrame,
     panel_coef_df: pd.DataFrame,
     fitted_df: pd.DataFrame,
@@ -343,16 +389,18 @@ def save_master_workbook(
     model_comparison = pd.concat([panel_metrics, rf_metrics], ignore_index=True)
 
     with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl") as writer:
-        summary_df.to_excel(writer, sheet_name="summary", index=False)
-        raw_df.to_excel(writer, sheet_name="merged_data_with_migration", index=False)
-        migration_df.to_excel(writer, sheet_name="migration_data", index=False)
-        panel_df.to_excel(writer, sheet_name="panel_data", index=False)
-        panel_coef_df.to_excel(writer, sheet_name="panel_coefficients", index=False)
-        panel_metrics.to_excel(writer, sheet_name="panel_metrics", index=False)
-        rf_metrics.to_excel(writer, sheet_name="random_forest_metrics", index=False)
-        model_comparison.to_excel(writer, sheet_name="model_comparison", index=False)
-        fitted_df.to_excel(writer, sheet_name="fitted_values", index=False)
-        rf_importance.to_excel(writer, sheet_name="rf_importance", index=False)
+        summary_df.to_excel(writer, sheet_name="Summary", index=False)
+        raw_df.to_excel(writer, sheet_name="MergedDataWithMigration", index=False)
+        migration_df.to_excel(writer, sheet_name="MigrationData", index=False)
+        panel_df.to_excel(writer, sheet_name="PanelData", index=False)
+        state_period_df.to_excel(writer, sheet_name="StatePeriodAverages", index=False)
+        panel_coef_df.to_excel(writer, sheet_name="PanelCoefficients", index=False)
+        panel_metrics.to_excel(writer, sheet_name="PanelMetrics", index=False)
+        rf_metrics.to_excel(writer, sheet_name="RandomForestMetrics", index=False)
+        model_comparison.to_excel(writer, sheet_name="ModelComparison", index=False)
+        fitted_df.to_excel(writer, sheet_name="FittedValues", index=False)
+        rf_importance.to_excel(writer, sheet_name="RFImportance", index=False)
+
 
 # =========================================================
 # 9. MAIN SCRIPT
@@ -375,6 +423,7 @@ def main() -> None:
     # -----------------------------
     panel_df = prepare_panel_dataset(merged_df)
     summary_df = build_descriptive_summary(merged_df)
+    state_period_df = build_state_period_averages(merged_df)
 
     # -----------------------------
     # Main methodology: panel regression
@@ -393,6 +442,7 @@ def main() -> None:
         raw_df=merged_df,
         migration_df=migration_df,
         panel_df=panel_df,
+        state_period_df=state_period_df,
         summary_df=summary_df,
         panel_coef_df=panel_coef_df,
         fitted_df=fitted_df,
